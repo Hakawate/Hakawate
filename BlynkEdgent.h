@@ -1,0 +1,192 @@
+
+extern "C" {
+  void app_loop();
+  void eraseMcuConfig();
+  void restartMCU();
+}
+
+#include "Settings.h"
+#include <BlynkSimpleEsp32_SSL.h>
+float sensorData1;
+float sensorData2;
+float sensorData3;
+float sensorData4;
+#ifndef BLYNK_NEW_LIBRARY
+#error "Old version of Blynk library is in use. Please replace it with the new one."
+#endif
+
+#if !defined(BLYNK_TEMPLATE_ID) || !defined(BLYNK_DEVICE_NAME)
+#error "Please specify your BLYNK_TEMPLATE_ID and BLYNK_DEVICE_NAME"
+#endif
+
+#include "BlynkState.h"
+#include "ConfigStore.h"
+#include "ResetButton.h"
+#include "ConfigMode.h"
+#include "Indicator.h"
+#include "OTA.h"
+#include "Console.h"
+void manual_control();
+inline
+void BlynkState::set(State m) {
+  if (state != m && m < MODE_MAX_VALUE) {
+    DEBUG_PRINT(String(StateStr[state]) + " => " + StateStr[m]);
+    state = m;
+  }
+}
+
+void printDeviceBanner()
+{
+  Blynk.printBanner();
+  DEBUG_PRINT("--------------------------");
+  DEBUG_PRINT(String("Product:  ") + BLYNK_DEVICE_NAME);
+  DEBUG_PRINT(String("Hardware: ") + BOARD_HARDWARE_VERSION);
+  DEBUG_PRINT(String("Firmware: ") + BLYNK_FIRMWARE_VERSION " (build " __DATE__ " " __TIME__ ")");
+  if (configStore.getFlag(CONFIG_FLAG_VALID)) {
+    DEBUG_PRINT(String("Token:    ...") + (configStore.cloudToken+28));
+  }
+  DEBUG_PRINT(String("Device:   ") + BLYNK_INFO_DEVICE + " @ " + ESP.getCpuFreqMHz() + "MHz");
+  DEBUG_PRINT(String("MAC:      ") + WiFi.macAddress());
+  DEBUG_PRINT(String("Flash:    ") + ESP.getFlashChipSize() / 1024 + "K");
+  DEBUG_PRINT(String("ESP sdk:  ") + ESP.getSdkVersion());
+  DEBUG_PRINT(String("Chip rev: ") + ESP.getChipRevision());
+  DEBUG_PRINT(String("Free mem: ") + ESP.getFreeHeap());
+  DEBUG_PRINT("--------------------------");
+}
+
+void runBlynkWithChecks() {
+  Blynk.run();
+  if (BlynkState::get() == MODE_RUNNING) {
+    if (!Blynk.connected()) {
+      if (WiFi.status() == WL_CONNECTED) {
+        BlynkState::set(MODE_CONNECTING_CLOUD);
+      } else {
+        BlynkState::set(MODE_CONNECTING_NET);
+      }
+    }
+  }
+}
+
+class Edgent {
+
+public:
+  void begin()
+  {
+    indicator_init();
+    button_init();
+    config_init();
+    WiFi.persistent(false);
+    WiFi.enableSTA(true);   // Needed to get MAC
+    printDeviceBanner();
+    if (configStore.getFlag(CONFIG_FLAG_VALID)) {
+      BlynkState::set(MODE_CONNECTING_NET);
+    } else if (config_load_blnkopt()) {
+      DEBUG_PRINT("Firmware is preprovisioned");
+      BlynkState::set(MODE_CONNECTING_NET);
+    } else {
+      BlynkState::set(MODE_WAIT_CONFIG);
+    }
+  }
+  void run() {
+    app_loop();
+    switch (BlynkState::get()) {
+    case MODE_WAIT_CONFIG:       
+    case MODE_CONFIGURING:       enterConfigMode();    break;
+    case MODE_CONNECTING_NET:    enterConnectNet();    break;
+    case MODE_CONNECTING_CLOUD:  enterConnectCloud();  break;
+    case MODE_RUNNING:           runBlynkWithChecks(); break;
+    case MODE_OTA_UPGRADE:       enterOTA();           break;
+    case MODE_SWITCH_TO_STA:     enterSwitchToSTA();   break;
+    case MODE_RESET_CONFIG:      enterResetConfig();   break;
+    default:                     enterError();         break;
+    }
+  }
+};
+
+Edgent BlynkEdgent;
+BlynkTimer edgentTimer;
+
+void app_loop() {
+    edgentTimer.run();
+    edgentConsole.run();
+    manual_control();
+}
+
+void manual_control(){
+key = keypad.getKey();
+if (key) {
+    Serial.println(key);
+  }
+  if (key == '*') {
+    Serial.println("manual control");}
+     if (key == '1') {
+    digitalWrite(RelayPin1, toggleState_1);
+    toggleState_1 = !toggleState_1;
+    Blynk.virtualWrite(VPIN_BUTTON_1, toggleState_1);
+  }
+
+  if (key == '2') {
+    digitalWrite(RelayPin2, toggleState_2);
+    toggleState_2 = !toggleState_2;
+    Blynk.virtualWrite(VPIN_BUTTON_2, toggleState_2);
+    Serial.println(key);
+  }
+  if (key == '3') {
+    digitalWrite(RelayPin3, toggleState_3);
+    toggleState_3 = !toggleState_3;
+    Blynk.virtualWrite(VPIN_BUTTON_3, toggleState_3);
+    Serial.println(key);
+  }
+  if (key == '4') {
+    digitalWrite(RelayPin4, toggleState_4);
+    toggleState_4 = !toggleState_4;
+    Blynk.virtualWrite(VPIN_BUTTON_4, toggleState_4);
+    Serial.println(key);
+  }
+  if (key == '#') {
+    digitalWrite(13, 1);
+    delay(100);
+    Serial.println(key);
+  }
+  if (key == '*') {
+    pzem.resetEnergy();
+    delay(100);
+    Serial.println(key);
+    Serial.println("ENERGY REST MODE");
+  }
+ //lcd.clear();
+ lcd.setCursor(0,0);
+  lcd.print("V:");
+  lcd.setCursor(2,0);
+  lcd.print(voltage,1);
+  lcd.setCursor(8,0);
+  lcd.print("I:");
+ lcd.setCursor(10,0);
+  lcd.print(current);
+  lcd.setCursor(0,1);
+  lcd.print("P:");
+  lcd.setCursor(2,1);
+  lcd.print(power);
+  lcd.setCursor(8,1);
+  lcd.print("E:");
+  lcd.setCursor(10,1);
+ lcd.print(energy,3);
+
+}
+
+void sensor_data(){
+     voltage = pzem.voltage();
+     current = pzem.current();
+     power = pzem.power();
+     energy = pzem.energy();
+   //  frequency = pzem.frequency();
+  //   pf = pzem.pf();
+    if(isnan(voltage)){
+      voltage=0;
+      current=0;
+      power=0;
+      energy=0;}}
+  //  void myTimerEvent()
+ // {
+ // }
+ 
